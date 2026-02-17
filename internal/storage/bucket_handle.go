@@ -260,7 +260,7 @@ func (bh *bucketHandle) CreateAppendableObjectWriter(ctx context.Context,
 	}
 
 	if off != req.Offset {
-		err = fmt.Errorf("takeover offset for the created appendable object writer does not match the requested offset")
+		err = fmt.Errorf("takeover offset for the created appendable object writer %v does not match the requested offset %v", off, req.Offset)
 		return nil, err
 	}
 	w := &ObjectWriter{tw}
