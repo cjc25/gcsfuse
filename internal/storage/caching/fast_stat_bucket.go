@@ -408,9 +408,15 @@ func (b *fastStatBucket) StatObject(
 	if !req.ForceFetchFromGcs && req.ReturnExtendedObjectAttributes {
 		panic("invalid StatObjectRequest: ForceFetchFromGcs: false and ReturnExtendedObjectAttributes: true")
 	}
+
+	hit, entry := b.lookUp(req.Name)
+	if !hit {
+		entry = nil
+	}
+
 	// If fetching from gcs is enabled, directly make a call to GCS.
 	if req.ForceFetchFromGcs {
-		m, e, err = b.StatObjectFromGcs(ctx, req)
+		m, e, err = b.StatObjectFromGcs(ctx, req, entry)
 		if !req.ReturnExtendedObjectAttributes {
 			e = nil
 		}
@@ -418,7 +424,7 @@ func (b *fastStatBucket) StatObject(
 	}
 
 	// Do we have an entry in the cache?
-	if hit, entry := b.lookUp(req.Name); hit {
+	if hit {
 		// Negative entries result in NotFoundError.
 		if entry == nil {
 			err = &gcs.NotFoundError{
@@ -441,7 +447,7 @@ func (b *fastStatBucket) StatObject(
 	}
 
 	// Standard fallback to GCS.
-	return b.StatObjectFromGcs(ctx, req)
+	return b.StatObjectFromGcs(ctx, req, nil)
 }
 
 // LOCKS_EXCLUDED(b.mu)
@@ -540,7 +546,7 @@ func (b *fastStatBucket) DeleteFolder(ctx context.Context, folderName string) er
 }
 
 func (b *fastStatBucket) StatObjectFromGcs(ctx context.Context,
-	req *gcs.StatObjectRequest) (m *gcs.MinObject, e *gcs.ExtendedObjectAttributes, err error) {
+	req *gcs.StatObjectRequest, cachedEntry *gcs.MinObject) (m *gcs.MinObject, e *gcs.ExtendedObjectAttributes, err error) {
 	m, e, err = b.wrapped.StatObject(ctx, req)
 	if err != nil {
 		// Special case: NotFoundError -> negative entry.
@@ -549,6 +555,11 @@ func (b *fastStatBucket) StatObjectFromGcs(ctx context.Context,
 		}
 
 		return
+	}
+
+	if cachedEntry != nil && cachedEntry.Generation == m.Generation && cachedEntry.Size > m.Size {
+		logger.Infof("StatObjectFromGcs: Stale GCS size detected for %v gen %v. GCS: %v, Cache: %v. Using Cache size.", req.Name, m.Generation, m.Size, cachedEntry.Size)
+		m.Size = cachedEntry.Size
 	}
 
 	// Put the object in cache.
